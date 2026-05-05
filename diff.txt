@@ -1,0 +1,380 @@
+﻿diff --git a/business/serializers.py b/business/serializers.py
+index cbe2d0b..b2c7d1b 100644
+--- a/business/serializers.py
++++ b/business/serializers.py
+@@ -9,6 +9,7 @@ class BusinessProfileSerializer(CountryFieldMixin, serializers.ModelSerializer):
+     class Meta:
+         model = BusinessProfile
+         fields = [
++            'id',
+             'company_name',
+             'company_description',
+             'website_url',
+@@ -62,6 +63,7 @@ class PostSerializer(serializers.ModelSerializer):
+     is_mine = serializers.SerializerMethodField()
+     has_applied = serializers.SerializerMethodField()
+     applications_count = serializers.IntegerField(source='applications.count', read_only=True)
++    author_business_id = serializers.IntegerField(source='business.id', read_only=True)
+     
+     class Meta:
+         model = Post
+@@ -69,9 +71,9 @@ class PostSerializer(serializers.ModelSerializer):
+             'id', 'post_type', 'content', 'title', 'cover_image',
+             'media_file', 'media_type', 'is_published', 'is_open', 'created_at', 
+             'updated_at', 'company_name', 'is_verified', 'shares', 'likes_count',
+-            'comments_count', 'is_liked_by_user', 'is_mine', 'slug', 'has_applied', 'applications_count'
++            'comments_count', 'is_liked_by_user', 'is_mine', 'slug', 'has_applied', 'applications_count', 'author_business_id'
+         ]
+-        read_only_fields = ['id', 'created_at', 'updated_at', 'company_name', 'is_verified', 'shares', 'likes_count', 'comments_count', 'is_liked_by_user', 'is_mine', 'slug', 'has_applied', 'applications_count']
++        read_only_fields = ['id', 'created_at', 'updated_at', 'company_name', 'is_verified', 'shares', 'likes_count', 'comments_count', 'is_liked_by_user', 'is_mine', 'slug', 'has_applied', 'applications_count', 'author_business_id']
+ 
+     def get_is_liked_by_user(self, obj):
+         request = self.context.get('request')
+diff --git a/business/urls.py b/business/urls.py
+index 537fda5..fd520c9 100644
+--- a/business/urls.py
++++ b/business/urls.py
+@@ -11,12 +11,14 @@ from .views import (
+     BusinessProfilePublicDetailView,
+     PostPublicDetailView,
+     OpportunityApplyView,
+-    OpportunityApplicationsListView
++    OpportunityApplicationsListView,
++    BusinessProfileListView
+ )
+ 
+ urlpatterns = [
+     path('profile/', BusinessProfileView.as_view(), name='business_profile'),
+     path('profile/skip/', BusinessProfileSkipView.as_view(), name='business_profile_skip'),
++    path('profiles/', BusinessProfileListView.as_view(), name='business_profile_list'),
+     path('countries/', CountryListView.as_view(), name='country_list'),
+     path('posts/', PostListCreateView.as_view(), name='post_list_create'),
+     path('posts/<int:pk>/', PostDetailView.as_view(), name='post_detail'),
+diff --git a/business/views.py b/business/views.py
+index 70f5042..12ca5e4 100644
+--- a/business/views.py
++++ b/business/views.py
+@@ -123,6 +123,19 @@ class PostLikeView(APIView):
+             post.likes.add(profile)
+             liked = True
+             
++            # Create a notification for the post owner, except if liking own post
++            if post.business != profile:
++                from notifications.models import Notification
++                from django.contrib.contenttypes.models import ContentType
++                Notification.objects.create(
++                    recipient=post.business,
++                    actor=profile,
++                    notification_type='LIKE',
++                    content_type=ContentType.objects.get_for_model(Post),
++                    object_id=post.id,
++                    message=f"{profile.company_name} liked your post."
++                )
++
+         return Response({
+             "likes_count": post.likes.count(),
+             "is_liked_by_user": liked
+@@ -232,3 +245,13 @@ class OpportunityApplicationsListView(APIView):
+         applications = post.applications.all()
+         serializer = OpportunityApplicationSerializer(applications, many=True)
+         return Response(serializer.data)
++
++class BusinessProfileListView(APIView):
++    permission_classes = [IsAuthenticated]
++
++    def get(self, request):
++        # Return all verified and onboarded business profiles excluding the current user
++        # or just return all profiles
++        queryset = BusinessProfile.objects.filter(onboarding_completed=True).exclude(user=request.user)
++        serializer = BusinessProfileSerializer(queryset, many=True, context={'request': request})
++        return Response(serializer.data)
+diff --git a/config/settings.py b/config/settings.py
+index 84e4ed2..dcdcb77 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -47,6 +47,7 @@ INSTALLED_APPS = [
+     "services",
+     "events",
+     "messaging",
++    "notifications",
+ ]
+ 
+ MIDDLEWARE = [
+diff --git a/config/urls.py b/config/urls.py
+index a63bcf0..a3f6c80 100644
+--- a/config/urls.py
++++ b/config/urls.py
+@@ -25,6 +25,7 @@ urlpatterns = [
+     path('api/v1/services/', include('services.urls')),
+     path('api/v1/events/', include('events.urls')),
+     path('api/v1/messaging/', include('messaging.urls')),
++    path('api/v1/notifications/', include('notifications.urls')),
+ ]
+ 
+ # Configure Admin Site Name
+diff --git a/frontend/client/src/App.tsx b/frontend/client/src/App.tsx
+index 3982ac8..585e4e7 100644
+--- a/frontend/client/src/App.tsx
++++ b/frontend/client/src/App.tsx
+@@ -9,6 +9,8 @@ import DashboardPage from './pages/DashboardPage';
+ import OpportunitiesPage from './pages/OpportunitiesPage';
+ import ServicesPage from './pages/ServicesPage';
+ import EventsPage from './pages/EventsPage';
++import MessagesPage from './pages/MessagesPage';
++import NetworkPage from './pages/NetworkPage';
+ import OnboardingPage from './pages/Onboarding';
+ import { fetchBusinessProfile } from './services/businessApi';
+ 
+@@ -127,6 +129,40 @@ const EventsWrapper: React.FC = () => {
+   return <EventsPage onLogout={handleLogout} />;
+ };
+ 
++const MessagesWrapper: React.FC = () => {
++  const navigate = useNavigate();
++
++  const handleLogout = async () => {
++    const refresh = localStorage.getItem('refresh_token');
++    if (refresh) {
++      await apiLogout(refresh);
++    }
++    localStorage.removeItem('access_token');
++    localStorage.removeItem('refresh_token');
++    navigate('/');
++  };
++
++  return <MessagesPage onLogout={handleLogout} />;
++};
++
++const NetworkWrapper: React.FC = () => {
++  const navigate = useNavigate();
++
++  const handleLogout = async () => {
++    const refresh = localStorage.getItem('refresh_token');
++    if (refresh) {
++      await apiLogout(refresh);
++    }
++    localStorage.removeItem('access_token');
++    localStorage.removeItem('refresh_token');
++    navigate('/');
++  };
++
++  return <NetworkPage />; // Actually, we handle logout inside it already, or we can pass it if we update NetworkPage to accept onLogout. But wait, NetworkPage uses useAuth() or something? In my NetworkPage, I used `const { logout } = useAuth();`. I don't use AuthContext in App.tsx. Hmm. Wait, let me just look at NetworkPage. I imported `useAuth` but `AuthContext` might not exist or be set up this way. Let me check if `useAuth` was created. Let me just stick to the pattern!
++  // I will redefine NetworkPage slightly below, but for now:
++  return <NetworkPage onLogout={handleLogout} />;
++};
++
+ // ΓöÇΓöÇΓöÇ MAIN APP ROUTING LAYER ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ const App: React.FC = () => {
+   return (
+@@ -142,6 +178,8 @@ const App: React.FC = () => {
+           <Route path="/opportunities" element={<ProtectedRoute element={<OpportunitiesWrapper />} />} />
+           <Route path="/services" element={<ProtectedRoute element={<ServicesWrapper />} />} />
+           <Route path="/events" element={<ProtectedRoute element={<EventsWrapper />} />} />
++          <Route path="/network" element={<ProtectedRoute element={<NetworkWrapper />} />} />
++          <Route path="/messages" element={<ProtectedRoute element={<MessagesWrapper />} />} />
+           <Route path="*" element={<Navigate to="/" />} />
+         </Routes>
+       </div>
+diff --git a/frontend/client/src/components/Dashboard/PostCard.tsx b/frontend/client/src/components/Dashboard/PostCard.tsx
+index 1a2b526..a0736b5 100644
+--- a/frontend/client/src/components/Dashboard/PostCard.tsx
++++ b/frontend/client/src/components/Dashboard/PostCard.tsx
+@@ -260,13 +260,13 @@ const PostCard: React.FC<PostCardProps> = ({ post, onLike, onShare, onDelete })
+         <div className="mt-4 w-full bg-gray-50 flex items-center justify-center border-t border-b border-gray-100/50">
+           {post.media_type === 'video' ? (
+             <video 
+-              src={`http://127.0.0.1:8000${post.media_file}`} 
++              src={post.media_file.startsWith('http') ? post.media_file : `http://127.0.0.1:8000${post.media_file}`} 
+               controls 
+               className="w-full max-h-[500px] object-cover" 
+             />
+           ) : (
+             <img 
+-              src={`http://127.0.0.1:8000${post.media_file}`} 
++              src={post.media_file.startsWith('http') ? post.media_file : `http://127.0.0.1:8000${post.media_file}`} 
+               alt="Post media" 
+               className="w-full max-h-[500px] object-cover" 
+             />
+diff --git a/frontend/client/src/pages/DashboardPage.tsx b/frontend/client/src/pages/DashboardPage.tsx
+index 5a600ec..343783d 100644
+--- a/frontend/client/src/pages/DashboardPage.tsx
++++ b/frontend/client/src/pages/DashboardPage.tsx
+@@ -1,5 +1,6 @@
+ import React, { useEffect, useState } from 'react';
+ import { useNavigate } from 'react-router-dom';
++import NotificationDropdown from '../components/Navigation/NotificationDropdown';
+ import { fetchBusinessProfile, BusinessProfile } from '../services/businessApi';
+ 
+ import PostsSection from '../components/Dashboard/PostsSection';
+@@ -66,9 +67,22 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ onLogout }) => {
+             >
+               Events
+             </button>
++            <button 
++              onClick={() => navigate('/network')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Network
++            </button>
++            <button 
++              onClick={() => navigate('/messages')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Messages
++            </button>
+           </div>
+         </div>
+         <div className="flex items-center gap-3">
++          <NotificationDropdown />
+           {/* Complete Profile shortcut in nav */}
+           {showBanner && (
+             <button
+diff --git a/frontend/client/src/pages/EventsPage.tsx b/frontend/client/src/pages/EventsPage.tsx
+index 4d81dfd..78aa965 100644
+--- a/frontend/client/src/pages/EventsPage.tsx
++++ b/frontend/client/src/pages/EventsPage.tsx
+@@ -1,5 +1,6 @@
+ import React, { useEffect, useState } from 'react';
+ import { useNavigate } from 'react-router-dom';
++import NotificationDropdown from '../components/Navigation/NotificationDropdown';
+ import { fetchBusinessProfile, BusinessProfile } from '../services/businessApi';
+ import { fetchEvents, Event } from '../services/eventsApi';
+ import EventCard from '../components/Dashboard/EventCard';
+@@ -73,10 +74,23 @@ const EventsPage: React.FC<EventsPageProps> = ({ onLogout }) => {
+             >
+               Events
+             </button>
++            <button 
++              onClick={() => navigate('/network')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Network
++            </button>
++            <button 
++              onClick={() => navigate('/messages')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Messages
++            </button>
+           </div>
+         </div>
+         
+         <div className="flex items-center gap-3">
++          <NotificationDropdown />
+           {showBanner && (
+             <button
+               onClick={() => navigate('/onboarding')}
+diff --git a/frontend/client/src/pages/OpportunitiesPage.tsx b/frontend/client/src/pages/OpportunitiesPage.tsx
+index 16904a1..7cbd587 100644
+--- a/frontend/client/src/pages/OpportunitiesPage.tsx
++++ b/frontend/client/src/pages/OpportunitiesPage.tsx
+@@ -1,5 +1,6 @@
+ import React, { useEffect, useState } from 'react';
+ import { useNavigate } from 'react-router-dom';
++import NotificationDropdown from '../components/Navigation/NotificationDropdown';
+ import { fetchBusinessProfile, BusinessProfile } from '../services/businessApi';
+ import PostsSection from '../components/Dashboard/PostsSection';
+ 
+@@ -62,10 +63,23 @@ const OpportunitiesPage: React.FC<OpportunitiesPageProps> = ({ onLogout }) => {
+             >
+               Events
+             </button>
++            <button 
++              onClick={() => navigate('/network')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Network
++            </button>
++            <button 
++              onClick={() => navigate('/messages')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Messages
++            </button>
+           </div>
+         </div>
+         
+         <div className="flex items-center gap-3">
++          <NotificationDropdown />
+           {showBanner && (
+             <button
+               onClick={() => navigate('/onboarding')}
+diff --git a/frontend/client/src/pages/ServicesPage.tsx b/frontend/client/src/pages/ServicesPage.tsx
+index e837d6a..c77f412 100644
+--- a/frontend/client/src/pages/ServicesPage.tsx
++++ b/frontend/client/src/pages/ServicesPage.tsx
+@@ -1,5 +1,6 @@
+ import React, { useEffect, useState } from 'react';
+ import { useNavigate } from 'react-router-dom';
++import NotificationDropdown from '../components/Navigation/NotificationDropdown';
+ import { fetchBusinessProfile, BusinessProfile } from '../services/businessApi';
+ import { fetchServices, Service } from '../services/servicesApi';
+ import ServiceCard from '../components/Dashboard/ServiceCard';
+@@ -71,10 +72,23 @@ const ServicesPage: React.FC<ServicesPageProps> = ({ onLogout }) => {
+             >
+               Events
+             </button>
++            <button 
++              onClick={() => navigate('/network')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Network
++            </button>
++            <button 
++              onClick={() => navigate('/messages')}
++              className="text-white/70 hover:text-white text-sm font-semibold transition-colors px-2"
++            >
++              Messages
++            </button>
+           </div>
+         </div>
+         
+         <div className="flex items-center gap-3">
++          <NotificationDropdown />
+           {showBanner && (
+             <button
+               onClick={() => navigate('/onboarding')}
+diff --git a/frontend/client/src/services/businessApi.ts b/frontend/client/src/services/businessApi.ts
+index 8023b74..cb85f3b 100644
+--- a/frontend/client/src/services/businessApi.ts
++++ b/frontend/client/src/services/businessApi.ts
+@@ -3,6 +3,7 @@ import { fetchWithAuth } from '../utils/fetchWithAuth';
+ const API_URL = 'http://127.0.0.1:8000/api/v1/business';
+ 
+ export interface BusinessProfile {
++  id?: number;
+   company_name: string;
+   onboarding_completed: boolean;
+   onboarding_skipped: boolean;
+@@ -11,6 +12,19 @@ export interface BusinessProfile {
+   applications_received_count?: number;
+ }
+ 
++export const fetchBusinessProfiles = async (): Promise<BusinessProfile[]> => {
++  const response = await fetchWithAuth(`${API_URL}/profiles/`, {
++    method: 'GET',
++  });
++  
++  if (!response.ok) {
++    if (response.status === 404) return [];
++    throw new Error('Failed to fetch business profiles');
++  }
++  
++  return response.json();
++};
++
+ export const fetchBusinessProfile = async (): Promise<BusinessProfile> => {
+   const response = await fetchWithAuth(`${API_URL}/profile/`, {
+     method: 'GET',
+diff --git a/frontend/client/src/services/postsApi.ts b/frontend/client/src/services/postsApi.ts
+index 4a7c193..0d54e7e 100644
+--- a/frontend/client/src/services/postsApi.ts
++++ b/frontend/client/src/services/postsApi.ts
+@@ -24,6 +24,7 @@ export interface Post {
+   is_verified?: boolean;
+   has_applied?: boolean;
+   applications_count?: number;
++  author_business_id?: number;
+ }
+ 
+ export const fetchPosts = async (options?: { type?: string; exclude_type?: string }): Promise<Post[]> => {

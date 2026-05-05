@@ -1,0 +1,17 @@
+[
+  {
+    "id": 10,
+    "time": "2026-03-20 06:37:29.521219+00:00",
+    "content": "client:132 Cross-Origin-Opener-Policy policy would block the window.closed call.\r\n_.Xf.C @ client:132Understand this error\r\nclient:132 Cross-Origin-Opener-Policy policy would block the window.closed call.\r\n_.Xf.C @ client:132Understand this error\r\nclient:132 Cross-Origin-Opener-Policy policy would block the window.closed call.\r\n_.Xf.C @ client:132Understand this error\r\nclient:132 Cross-Origin-Opener-Policy policy would block the window.closed call.\r\n_.Xf.C @ client:132Understand this error\r\n127.0.0.1:8000/api/v1/business/posts/:1  Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+  },
+  {
+    "id": 9,
+    "time": "2026-03-20 06:36:51.356978+00:00",
+    "content": "What is on your mind today"
+  },
+  {
+    "id": 8,
+    "time": "2026-03-20 06:32:56.384089+00:00",
+    "content": "What is on your mind today?"
+  }
+]

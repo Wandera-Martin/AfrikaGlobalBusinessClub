@@ -1,0 +1,6 @@
+﻿src/App.tsx(161,11): error TS2741: Property 'onLogout' is missing in type '{}' but required in type 'NetworkPageProps'.
+src/pages/MessagesPage.tsx(68,19): error TS2503: Cannot find namespace 'NodeJS'.
+src/pages/NetworkPage.tsx(213,34): error TS2339: Property 'primary_sector' does not exist on type 'BusinessProfile'.
+src/pages/NetworkPage.tsx(214,110): error TS2339: Property 'primary_sector' does not exist on type 'BusinessProfile'.
+src/pages/NetworkPage.tsx(218,63): error TS2339: Property 'country' does not exist on type 'BusinessProfile'.
+src/pages/NetworkPage.tsx(224,32): error TS2339: Property 'company_description' does not exist on type 'BusinessProfile'.
